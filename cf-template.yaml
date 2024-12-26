@@ -1,0 +1,205 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Deploy a Step Function with two Lambdas, triggered by API Gateway, using an S3 bucket and enabling GuardDuty.
+
+Resources:
+
+  # S3 Bucket for Lambda Functions
+  ImageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: naqib-term-assignment-bucket
+
+  # First Lambda Function (Upload Image)
+  UploadImageFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: UploadImageFunction
+      Handler: index.lambda_handler
+      Role: arn:aws:iam::243278377250:role/LabRole # lab role
+      Code:
+        ZipFile: |
+          import boto3
+          import uuid
+          import base64
+
+          s3 = boto3.client('s3')
+
+          def lambda_handler(event, context):
+              bucket_name = 'naqib-term-assignment-bucket'
+              base64_image = event['image']
+              
+              # Decode the base64-encoded image
+              image_data = base64.b64decode(base64_image)
+              
+              # Generate a unique ID and use the appropriate format based on the content
+              image_id = str(uuid.uuid4()) + '.png'  # Update to .jpg if image is JPEG
+              content_type = 'image/png'  # Update to 'image/jpeg' if image is JPEG
+              
+              # Upload to S3 with correct ContentType
+              s3.put_object(
+                  Bucket=bucket_name,
+                  Key=image_id,
+                  Body=image_data,
+                  ContentType=content_type
+              )
+              
+              return {
+                  'statusCode': 200,
+                  'image_id': image_id
+              }
+      Runtime: python3.9
+      Timeout: 60
+
+  # Second Lambda Function (Process Image with Textract)
+  ProcessImageFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: ProcessImageFunction
+      Handler: index.lambda_handler
+      Role: arn:aws:iam::243278377250:role/LabRole # lab role
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+
+          textract = boto3.client('textract')
+          s3 = boto3.client('s3')
+
+          def lambda_handler(event, context):
+              bucket_name = 'naqib-term-assignment-bucket'
+              image_id = event['image_id']
+              response = textract.analyze_document(
+                  Document={'S3Object': {'Bucket': bucket_name, 'Name': image_id}},
+                  FeatureTypes=['FORMS']
+              )
+
+              # Initialize list to hold extracted text
+              extracted_text = []
+
+              # Extract blocks from response
+              blocks = response.get('Blocks', [])
+              
+              # Extract text from 'LINE' and 'WORD' blocks
+              for block in blocks:
+                  if block['BlockType'] in ['LINE']:
+                      text = block.get('Text', '')
+                      if text:
+                          extracted_text.append(text)
+
+              # Prepare JSON response with extracted text
+              json_response = {
+                  'text': ' | '.join(extracted_text)
+              }
+
+              # result = json.dumps(key_value_pairs, indent=4)
+              return {
+                  'statusCode': 200,
+                  'result': json_response
+              } 
+      Runtime: python3.9
+      Timeout: 60
+
+  # Create CloudWatch Logs Log Group for State Machine
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/states/ImageProcessingStateMachine
+      RetentionInDays: 14
+
+  # Step Function State Machine
+  StepFunctionStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: ImageProcessingStateMachine
+      DefinitionString: !Sub |
+        {
+          "Comment": "State machine to process images",
+          "StartAt": "UploadImageToS3",
+          "States": {
+            "UploadImageToS3": {
+              "Type": "Task",
+              "Resource": "${UploadImageFunction.Arn}",
+              "Next": "ProcessImageWithTextract",
+              "ResultPath": "$.uploadResult"
+            },
+            "ProcessImageWithTextract": {
+              "Type": "Task",
+              "Resource": "${ProcessImageFunction.Arn}",
+              "End": true,
+              "InputPath": "$.uploadResult"
+            }
+          }
+        }
+      RoleArn: arn:aws:iam::243278377250:role/LabRole
+      StateMachineType: EXPRESS
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+
+  # API Gateway Rest API
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: ImageProcessingApi
+      Description: API to trigger the image processing state machine
+
+  # API Gateway Resource
+  ApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: process-image
+      RestApiId: !Ref ApiGateway
+
+  # API Gateway Method
+  ApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      ResourceId: !Ref ApiResource
+      RestApiId: !Ref ApiGateway
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:states:action/StartSyncExecution
+        Credentials: arn:aws:iam::243278377250:role/LabRole # lab role
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: |
+            {
+              "input": "$input.json('$')",
+              "stateMachineArn": "${StepFunctionStateMachine.Arn}"
+            }
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+
+  # API Gateway Deployment
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: prod
+
+  # Enable GuardDuty
+  GuardDuty:
+    Type: AWS::GuardDuty::Detector
+    Properties:
+      Enable: true
+
+Outputs:
+  ApiUrl:
+    Description: "URL of the API Gateway"
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/process-image"
+  ImageBucketName:
+    Description: "Name of the S3 bucket"
+    Value: !Ref ImageBucket
+  StepFunctionStateMachineArn:
+    Description: "ARN of the Step Functions State Machine"
+    Value: !GetAtt StepFunctionStateMachine.Arn

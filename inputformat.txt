@@ -1,0 +1,13 @@
+{
+  "input":"{\"image\": \"<Text here>\"}",
+  "stateMachineArn": "<ARN statemachine>"
+}
+
+
+Services:
+Stepfunction
+lambdas
+Guard duty
+api gateway
+textract
+S3 bucket
