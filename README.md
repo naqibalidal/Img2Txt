@@ -12,12 +12,12 @@ The solution allows for the automated uploading of images to an S3 bucket, follo
 
 ### Architecture Flow:
 
-* •	**API Gateway:** The image processing workflow is initiated by an HTTP request to API Gateway, which acts as the entry point for the application.
-* •	**Step Functions:** The request from API Gateway triggers a Step Functions state machine, which coordinates the execution of two Lambda functions.
-* •	**Lambda Functions:** The first Lambda function handles the image upload to S3, while the second function processes the image using Amazon Textract to extract text.
-* •	**S3:** The uploaded image is stored in an S3 bucket, which serves as the source for Textract.
-* •	**Textract:** The second Lambda function uses Amazon Textract to analyze the image and extract text.
-* •	**GuardDuty:** AWS GuardDuty is enabled to monitor the environment for any suspicious activity and ensure the application's security.
+*   **API Gateway:** The image processing workflow is initiated by an HTTP request to API Gateway, which acts as the entry point for the application.
+* 	**Step Functions:** The request from API Gateway triggers a Step Functions state machine, which coordinates the execution of two Lambda functions.
+* 	**Lambda Functions:** The first Lambda function handles the image upload to S3, while the second function processes the image using Amazon Textract to extract text.
+* 	**S3:** The uploaded image is stored in an S3 bucket, which serves as the source for Textract.
+* 	**Textract:** The second Lambda function uses Amazon Textract to analyze the image and extract text.
+* 	**GuardDuty:** AWS GuardDuty is enabled to monitor the environment for any suspicious activity and ensure the application's security.
 
 ### Format to invoke api post method: 
 
